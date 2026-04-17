@@ -1,9 +1,31 @@
 # Averlyn Vaccine Tracker — Backend API
 
-FastAPI backend for the Averlyn Vaccine Tracker.
-Handles vaccine CRUD, auth verification, and connects to Supabase for data storage.
+FastAPI backend for the **Averlyn Vaccine Tracker** — a private baby vaccine tracking app for our daughter Averlyn (born 2025-12-03).
+
+Handles vaccine CRUD, Google OAuth token verification (via Supabase), and email whitelist access control. Only two Google accounts are authorized to access the system.
 
 > Live: [averlyn-vaccine-be.onrender.com](https://averlyn-vaccine-be.onrender.com)
+
+## About
+
+This backend is part of a full-stack vaccine tracker that follows Taiwan's public (公費) and self-paid (自費) vaccination schedule. It serves as the API layer between the React frontend (on Vercel) and Supabase PostgreSQL.
+
+### Development History
+
+The project was developed using **SDD (Spec-Driven Development)**:
+
+1. **OpenSpec Phase** — A detailed [OpenSpec document](docs/openspec.md) was written first, defining database schema (3 tables), API endpoints (5 routes), auth flow, data migration plan, and 16 acceptance criteria
+2. **Backend Implementation** — FastAPI app with Supabase service role client, JWT verification via `auth.get_user()`, email whitelist middleware
+3. **Data Migration** — 36 vaccine records migrated from the original static site's `data.json` to Supabase PostgreSQL
+4. **Production Hardening** — Resolved ES256 JWT signing (new Supabase projects no longer use HS256), CORS configuration, Render Python version pinning
+
+### Lessons Learned (Supabase 2025+)
+
+| Issue | Root Cause | Solution |
+|-------|-----------|----------|
+| JWT decode fails | New Supabase uses **ES256**, not HS256 | Use `auth.get_user(token)` instead of manual decode |
+| "Invalid API key" | `sb_secret_` format not supported by `supabase-py` | Use **Legacy** format keys (`eyJhbG...`) |
+| JWKS endpoint 404 | `/auth/v1/jwks` doesn't exist on some projects | Don't rely on JWKS; use `auth.get_user()` |
 
 ## Architecture
 
