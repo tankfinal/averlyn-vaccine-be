@@ -1,8 +1,12 @@
+import logging
+
 from fastapi import Depends, HTTPException, Header
 from jose import jwt, JWTError
 from supabase import create_client, Client
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def get_supabase_client() -> Client:
@@ -29,8 +33,20 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
             algorithms=["HS256"],
             audience="authenticated",
         )
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    except JWTError as e:
+        logger.error("JWT verification failed: %s", e)
+        # Try without audience check in case aud claim differs
+        try:
+            payload_debug = jwt.decode(
+                token,
+                settings.SUPABASE_JWT_SECRET,
+                algorithms=["HS256"],
+                options={"verify_aud": False},
+            )
+            logger.error("Token decoded without aud check. aud=%s, iss=%s", payload_debug.get("aud"), payload_debug.get("iss"))
+        except JWTError as e2:
+            logger.error("Token also failed without aud check: %s", e2)
+        raise HTTPException(status_code=401, detail=f"Invalid or expired token: {e}")
 
     # Email whitelist check
     email = payload.get("email", "")
