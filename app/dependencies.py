@@ -27,25 +27,16 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
     token = authorization.removeprefix("Bearer ")
 
     try:
+        header = jwt.get_unverified_header(token)
+        logger.info("JWT header: alg=%s, typ=%s", header.get("alg"), header.get("typ"))
         payload = jwt.decode(
             token,
             settings.SUPABASE_JWT_SECRET,
-            algorithms=["HS256"],
+            algorithms=["HS256", "HS384", "HS512"],
             audience="authenticated",
         )
     except JWTError as e:
         logger.error("JWT verification failed: %s", e)
-        # Try without audience check in case aud claim differs
-        try:
-            payload_debug = jwt.decode(
-                token,
-                settings.SUPABASE_JWT_SECRET,
-                algorithms=["HS256"],
-                options={"verify_aud": False},
-            )
-            logger.error("Token decoded without aud check. aud=%s, iss=%s", payload_debug.get("aud"), payload_debug.get("iss"))
-        except JWTError as e2:
-            logger.error("Token also failed without aud check: %s", e2)
         raise HTTPException(status_code=401, detail=f"Invalid or expired token: {e}")
 
     # Email whitelist check
