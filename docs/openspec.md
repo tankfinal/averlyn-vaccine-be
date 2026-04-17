@@ -1,5 +1,12 @@
 # OpenSpec: Averlyn Vaccine Tracker — Full Stack Upgrade
 
+> **This is the shared OpenSpec for the entire Averlyn Vaccine Tracker system (frontend + backend).**
+> It lives in the backend repo (`averlyn-vaccine-be`) as the single source of truth.
+> The frontend repo (`averlyn-vaccine-fe`) references this document.
+>
+> - Backend repo: [tankfinal/averlyn-vaccine-be](https://github.com/tankfinal/averlyn-vaccine-be)
+> - Frontend repo: [tankfinal/averlyn-vaccine-fe](https://github.com/tankfinal/averlyn-vaccine-fe)
+
 ## 1. Overview
 
 Migrate the Averlyn Vaccine Tracker from a pure static site (HTML + CSS + JS on GitHub Pages) to a full-stack application with authenticated editing capabilities.
