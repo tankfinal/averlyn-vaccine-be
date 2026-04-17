@@ -1,3 +1,5 @@
+import base64
+import json
 import logging
 
 from fastapi import Depends, HTTPException, Header
@@ -26,9 +28,16 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
 
     token = authorization.removeprefix("Bearer ")
 
+    # Decode header to find algorithm
     try:
-        header = jwt.get_unverified_header(token)
-        logger.info("JWT header: alg=%s, typ=%s", header.get("alg"), header.get("typ"))
+        header_b64 = token.split(".")[0]
+        header_b64 += "=" * (-len(header_b64) % 4)  # pad
+        header_json = json.loads(base64.urlsafe_b64decode(header_b64))
+        logger.error("TOKEN HEADER: %s", header_json)
+    except Exception as e:
+        logger.error("Failed to decode token header: %s", e)
+
+    try:
         payload = jwt.decode(
             token,
             settings.SUPABASE_JWT_SECRET,
