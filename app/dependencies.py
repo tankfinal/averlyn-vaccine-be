@@ -24,7 +24,10 @@ async def _get_jwks() -> dict:
 
     jwks_url = f"{settings.SUPABASE_URL}/auth/v1/jwks"
     async with httpx.AsyncClient() as client:
-        resp = await client.get(jwks_url)
+        resp = await client.get(
+            jwks_url,
+            headers={"apikey": settings.SUPABASE_SERVICE_KEY},
+        )
         resp.raise_for_status()
         _jwks_cache = resp.json()
         _jwks_cache_time = time.time()
