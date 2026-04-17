@@ -20,7 +20,7 @@ Migrate the Averlyn Vaccine Tracker from a pure static site (HTML + CSS + JS on 
 
 | # | As a... | I want to... | So that... |
 |---|---------|-------------|-----------|
-| US-1 | Visitor (unauthenticated) | View all vaccine cards, filter by category, expand details | I can see Averlyn's vaccine schedule without logging in |
+| US-1 | Visitor (unauthenticated) | See a login page prompting Google sign-in | Only authorized family members can access the site |
 | US-2 | Authenticated user (wife) | Log in with my Google account | I can edit vaccine records securely |
 | US-3 | Authenticated user | Mark a vaccine as "done" and input the vaccination date | The record reflects the actual vaccination |
 | US-4 | Authenticated user | Undo a "done" vaccine (mark back to "not done") | I can correct mistakes |
@@ -288,25 +288,40 @@ class BabyRead(BaseModel):
 
 #### 4.2.4 Auth Middleware (`dependencies.py`)
 
+> **Updated (2026-04-17):** Originally spec'd as manual HS256 JWT decode via `python-jose`.
+> Changed to `supabase.auth.get_user(token)` because new Supabase projects (2025+) sign
+> tokens with **ES256** (asymmetric), and the JWKS endpoint (`/auth/v1/jwks`) returns 404.
+> Using `auth.get_user()` delegates verification to Supabase itself — algorithm-agnostic.
+
 ```python
 from fastapi import Depends, HTTPException, Header
-from jose import jwt, JWTError
+from supabase import Client
 
-async def get_current_user(authorization: str = Header(...)):
+async def get_current_user(authorization: str = Header(...)) -> dict:
     """
-    Extracts and verifies Supabase JWT from Authorization: Bearer <token>.
-    Returns the user payload (sub, email, etc.).
-    Raises 401 if invalid/expired.
+    Verify Supabase JWT by calling auth.get_user(token).
+    Returns user metadata dict with email, id, etc.
+    Raises 401 if token is missing or invalid.
+    Raises 403 if the user's email is not in the allowed list.
     """
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization header")
     token = authorization.removeprefix("Bearer ")
     try:
-        payload = jwt.decode(token, settings.SUPABASE_JWT_SECRET, algorithms=["HS256"],
-                             audience="authenticated")
-        return payload
-    except JWTError:
+        sb = get_supabase_client()
+        user_response = sb.auth.get_user(token)
+        user = user_response.user
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    # Email whitelist check
+    email = user.email or ""
+    allowed = [e.strip() for e in settings.ALLOWED_EMAILS.split(",") if e.strip()]
+    if email not in allowed:
+        raise HTTPException(status_code=403, detail="Access denied")
+    return {"sub": user.id, "email": user.email}
 ```
 
 #### 4.2.5 API Endpoints
@@ -523,17 +538,37 @@ Local UI state (via `useState`):
 
 #### 4.3.5 Auth Flow (Step by Step)
 
-1. User clicks **LoginButton** in header
-2. `LoginButton` calls `supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: '<FRONTEND_URL>/auth/callback' } })`
-3. Browser redirects to Google consent screen
-4. Google redirects back to `<FRONTEND_URL>/auth/callback` with auth code
-5. **AuthCallback** component calls `supabase.auth.exchangeCodeForSession(code)` to obtain session (access_token + refresh_token)
-6. **AuthProvider** stores session in state, `supabase.auth.onAuthStateChange` keeps it synced
-7. `api/client.ts` reads access_token from AuthProvider context and attaches `Authorization: Bearer <token>` to all PATCH requests
-8. When token expires, Supabase JS client auto-refreshes using refresh_token
-9. User clicks **Logout** in UserMenu -> calls `supabase.auth.signOut()` -> session cleared
+> **Updated (2026-04-17):** Originally spec'd as PKCE flow with `/auth/callback` route.
+> Changed to **implicit flow** because PKCE's code_verifier was getting lost during the
+> multi-hop redirect chain (App → Supabase → Google → Supabase → App).
+> Implicit flow returns tokens in URL hash fragment, handled automatically by
+> `detectSessionInUrl: true`. The `/auth/callback` route was removed; redirect goes to `/`.
+
+Supabase client configuration:
+```typescript
+createClient(url, key, {
+  auth: {
+    flowType: "implicit",
+    detectSessionInUrl: true,
+  },
+});
+```
+
+Flow:
+1. User clicks **Login** button on `LoginPage`
+2. `AuthProvider` calls `supabase.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.origin } })`
+3. Browser redirects to Supabase Auth → Google consent screen
+4. Google redirects back to Supabase Auth callback
+5. Supabase redirects to `<FRONTEND_URL>/#access_token=...` (implicit flow, hash fragment)
+6. `detectSessionInUrl: true` auto-parses the hash fragment and establishes the session
+7. **AuthProvider**'s `onAuthStateChange` listener fires, sets session in React state
+8. `api/client.ts` axios interceptor calls `supabase.auth.getSession()` and attaches `Authorization: Bearer <token>` to all requests
+9. When token expires, Supabase JS client auto-refreshes using refresh_token
+10. User clicks **Logout** → calls `supabase.auth.signOut()` → session cleared → shows login page
 
 **Key point**: The Supabase JS client is used **only for auth** on the frontend. All data operations go through the FastAPI backend.
+
+**Important**: React Query hooks (`useVaccines`, `useBaby`) must set `enabled: !!session` to prevent API calls before the session is established, which would result in 422 errors from missing Authorization headers.
 
 ---
 
@@ -686,7 +721,7 @@ When logged in, each **VaccineCard** gets an **edit button** (pencil icon or "Ed
 
 ## 5. Acceptance Criteria
 
-- [ ] **AC-1**: Visiting the frontend URL without login shows all 35 vaccine cards in the correct order with correct statuses, matching the current static site's appearance
+- [x] **AC-1**: ~~Visiting without login shows all cards~~ **Updated:** Site is fully private — unauthenticated visitors see only the login page. After login, shows all 36 vaccine cards in correct order
 - [ ] **AC-2**: Stats bar shows correct done/upcoming counts and next-vaccine countdown
 - [ ] **AC-3**: Filter buttons (all, public, self-paid, done, upcoming) work correctly
 - [ ] **AC-4**: Clicking a card expands/collapses its detail section
@@ -720,17 +755,18 @@ When logged in, each **VaccineCard** gets an **edit button** (pencil icon or "Ed
 **Backend (`requirements.txt`)**:
 - `fastapi`
 - `uvicorn[standard]`
-- `supabase` (Python Supabase client)
-- `python-jose[cryptography]` — JWT verification
-- `pydantic`
+- `supabase` (Python Supabase client — also used for `auth.get_user()` token verification)
+- `python-jose[cryptography]` — kept as dependency but no longer used for JWT decode
+- `pydantic`, `pydantic-settings`
 - `python-dotenv`
 
 ### 6.2 Frontend Routes
 
+> **Updated (2026-04-17):** `/auth/callback` route removed. Implicit flow redirects to `/` directly.
+
 | Path | Component | Purpose |
 |------|-----------|---------|
-| `/` | `App` (main page) | Vaccine tracker view |
-| `/auth/callback` | `AuthCallback` | Handles OAuth redirect |
+| `/` | `App` → `MainPage` | Login page (if no session) or vaccine tracker view |
 
 ### 6.3 Repo Strategy
 
@@ -763,7 +799,7 @@ These are pure functions and can be ported with minimal changes (add type annota
 - **Push notifications** — no reminders or alerts
 - **Offline support / PWA** — not required
 - **i18n** — UI stays in Chinese (Traditional) with English vaccine names
-- **User roles / permissions** — any authenticated Google user can edit (no allowlist)
+- **User roles / permissions** — no role hierarchy; all whitelisted users have equal read/write access
 - **Vaccine scheduling logic** — no auto-calculation of next dose dates
 - **Print / export** — not required
 
@@ -783,3 +819,21 @@ All open questions have been resolved:
 | OQ-4 | `updated_at` display | **Only** when `updated_at > created_at` |
 | OQ-5 | Repo strategy | **Two repos**: `averlyn-vaccine-fe`, `averlyn-vaccine-be` |
 | NEW | Site privacy | **Fully private** — login page for unauthenticated, whitelist-only access |
+
+---
+
+## 9. Post-Implementation Changelog
+
+This section documents deviations from the original spec that occurred during implementation.
+
+| Date | Section | Original | Changed To | Reason |
+|------|---------|----------|-----------|--------|
+| 2026-04-17 | §4.2.4 Auth | `python-jose` HS256 manual JWT decode | `supabase.auth.get_user(token)` | New Supabase (2025+) signs tokens with ES256, not HS256. JWKS endpoint returns 404. |
+| 2026-04-17 | §4.3.5 Auth Flow | PKCE flow + `/auth/callback` route | Implicit flow + redirect to `/` | PKCE code_verifier lost during multi-hop redirect (App→Supabase→Google→Supabase→App) |
+| 2026-04-17 | §5 AC-1 | Unauthenticated visitors see all cards | Unauthenticated visitors see login page only | Privacy requirement added mid-spec — site is fully private |
+| 2026-04-17 | §7 Out of Scope | "no allowlist" | Email whitelist enforced | Contradicted §4.1.2 which defined the whitelist; corrected to match implementation |
+| 2026-04-17 | §6.2 Routes | `/auth/callback` route | Removed | No longer needed with implicit flow |
+| 2026-04-17 | §4.3.4 | No `enabled` guard on hooks | `enabled: !!session` on all query hooks | Without this, API calls fire before auth is ready, causing 422 errors |
+| 2026-04-17 | §4.1 | Supabase API keys (any format) | **Must use Legacy format** (`eyJhbG...`) | `supabase-py` and `supabase-js` don't support new `sb_` prefix keys |
+| 2026-04-17 | Deployment | No Vercel routing config mentioned | `vercel.json` with SPA rewrites required | Without rewrites, non-root routes return 404 on Vercel |
+| 2026-04-17 | Deployment | No Python version pin | `.python-version` = `3.12.0` required | Render defaults may install incompatible Python (e.g., 3.14 breaks pydantic-core) |
